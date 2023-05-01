@@ -1,0 +1,353 @@
+#!/bin/sh
+# xbonda06 Andrii Bondarenko
+# 23.03.2021
+
+export POSIXLY_CORRECT=yes
+export LC_ALL=C
+
+# Set constants for date format and editor
+DATETIME_FORMAT='%Y-%m-%d_%H-%M-%S'
+EDITOR="${EDITOR:-${VISUAL:-vi}}"
+MOLE_RC="${MOLE_RC:-$HOME/.mole/.molerc}"
+SECRET_LOG=$HOME/.mole/.log_"$USER"_$(date +"$DATETIME_FORMAT").bz2
+
+# Initialize variables used throughout the argument parsing
+MOST_FREQ=false
+GROUP_FILTER=""
+AFTER_DATE=""
+BEFORE_DATE=""
+LIST=false
+SECRET_LOG_CREATE=false
+DIRECTORIES=""
+
+# Create mole configuration file if it doesn't exist
+if [ ! -e "$MOLE_RC" ]; then
+  mkdir -p "$(dirname "$MOLE_RC")"
+  touch "$MOLE_RC"
+fi
+
+if [ -z "$MOLE_RC" ]; then
+  echo "Error 1: MOLE_RC is not set" >&2
+  exit 1
+fi
+
+if ! command -v realpath >/dev/null; then
+  echo "Error 2: realpath is not installed. Please install it and try again." >&2
+  exit 2
+fi
+
+# Function to display help message
+HelpShow() {
+    echo "Usage: mole -h"
+    echo "       mole [-g GROUP] FILE"
+    echo "       mole [-m] [FILTERS] [DIRECTORY]"
+    echo "       mole list [FILTERS] [DIRECTORY]"
+    echo ""
+    echo "Keys:"
+    echo "    -h           show help message"
+    echo "    -g GROUP     open the FILE in the given GROUP"
+    echo "    -m           open the FILE that was most frequently modified using mole"
+    echo ""
+    echo "Commands:"
+    echo "    list         list all files opened with mole in DIRECTORY"
+    echo ""
+    echo "Filters:"
+    echo "    -a DATE      only consider files modified after DATE (YYYY-MM-DD format)"
+    echo "    -b DATE      only consider files modified before DATE (YYYY-MM-DD format)"
+    echo "    -g GROUPS    only consider files belonging to the specified GROUPS (comma-separated list)"
+    echo ""
+}
+
+# Function to filter the file list based on provided filters and return the filtered list
+FilterFileList() {
+    filteredList="$1"
+
+    if [ -n "$GROUP_FILTER" ]; then
+        filteredList=$(echo "$filteredList" | grep -Ew "(${GROUP_FILTER})$")
+    fi
+    if [ -n "$AFTER_DATE" ]; then
+        filteredList=$(echo "$filteredList" | awk -v date="$AFTER_DATE" '$2 > date')
+    fi
+    if [ -n "$BEFORE_DATE" ]; then
+        filteredList=$(echo "$filteredList" | awk -v date="$BEFORE_DATE" '$2 < date')
+    fi
+
+    echo "$filteredList"
+}
+
+# Function to write the filtered list of files with their groups
+# The function takes a directory as input, and outputs a formatted list
+# of unique files in the directory with their corresponding groups
+WriteList() {
+  # Get the input directory and convert it to an absolute path
+  directory="$1"
+  directory=$(realpath "$directory")
+
+  # Get the file list from MOLE_RC and filter it based on the directory
+  fileList=$(grep "^${directory}" "$MOLE_RC")
+
+  # Apply the filters to the fileList
+  filteredList=$(FilterFileList "$fileList")
+
+  if [ -n "$filteredList" ]; then
+    # Get the unique files from the filtered list
+    files=$(echo "$filteredList" | cut -d ' ' -f 1 | awk -F '/' '{print $NF}' | sort | uniq)
+  else
+    echo "Error 3: No files found"
+    exit 3
+  fi
+
+  # Calculate the max length of file names for proper formatting
+  max_length=0
+  for file in $files; do
+    length=${#file}
+    if [ "$length" -gt "$max_length" ] ; then
+      max_length=$length
+    fi
+  done
+
+  for file in $files; do
+    # Get the absolute path of the file from the filtered list
+    path=$(echo "$filteredList" | cut -d ' ' -f 1 | grep "$file$" | sort | uniq)
+
+    # Get the unique groups associated with the file
+    test=$(echo "$filteredList" | grep "^$path" | cut -d ' ' -f 3 | sort | grep -v "^$" | uniq)
+    stringcount=$(echo "$test" | wc -l)
+
+#   Check if there are multiple groups and format them as a comma-separated list
+    if [ "$stringcount" -gt 1 ]; then
+      groups=$(echo "$test" | sed ':a;N;$!ba;s/\n/,/g')
+    else
+      groups=$test
+    fi
+
+    if [ -z "$groups" ]; then
+      groups="-"
+    fi
+
+    indent=$((max_length - ${#file} + 1))
+
+    printf "%s:%*s%s\n" "$file" "$indent" "" "$groups"
+  done
+}
+
+# Function to create a secret log file
+# The function takes one or more directories as input (optional),
+# and writes the filtered file paths and their modification dates
+# in a bz2 compressed log file
+SecretLog() {
+  touch "$SECRET_LOG"
+  directories=$@
+# Apply filters to the MOLE_RC file list
+  filteredList=$(FilterFileList "$(cat "$MOLE_RC")")
+# Check if input directories are provided
+  if [ -z "$directories" ]; then
+#   If no input directories are provided, process all directories from the filtered list
+    paths=$(echo "$filteredList" | cut -d ' ' -f 1 | sort | uniq)
+    for path in $paths; do
+#     The test variable is used to check if there are multiple modification dates for a file
+#     We do not need to formate the dates if there is only one date
+      test=$(echo "$filteredList" | grep "^${path}" | cut -d ' ' -f 2 | sort | uniq)
+
+#     The variable stringcount is used to check how many modification dates are present for a file
+      stringcount=$(echo "$test" | wc -l)
+
+      if [ "$stringcount" -gt 1 ]; then
+        datetimes=$(echo "$test" | sed ':a;N;$!ba;s/\n/;/g')
+      else
+        datetimes=$test
+      fi
+      echo "$path;$datetimes" | bzip2 >> "$SECRET_LOG"
+    done
+  else
+    for directory in $directories; do
+      directory=$(realpath "$directory")
+      paths=$(echo "$filteredList" | grep "^${directory}" | cut -d ' ' -f 1 | sort | uniq)
+      for path in $paths; do
+          test=$(echo "$filteredList" | grep "^${path}" | cut -d ' ' -f 2 | sort | uniq)
+          stringcount=$(echo "$test" | wc -l)
+        if [ "$stringcount" -gt 1 ]; then
+          datetimes=$(echo "$test" | sed ':a;N;$!ba;s/\n/;/g')
+        else
+          datetimes=$test
+        fi
+        echo "$path;$datetimes" | bzip2 >> "$SECRET_LOG"
+      done
+    done
+  fi
+}
+
+# Function to find the most recently modified file in a directory
+MostRecentFile() {
+    directory="$1"
+    directory=$(realpath "$directory")
+    if [ ! -d "$directory" ]; then
+      echo "Error 4: directory $directory not found"
+      exit 4
+    fi
+    dirFilteredList=$(grep "^${directory}" "$MOLE_RC")
+    filteredFileList=$(FilterFileList "$dirFilteredList")
+    FILE=$(echo "$filteredFileList" | tail -n 1 | cut -d ' ' -f 1)
+    echo "$FILE"
+}
+
+# Function to find the most frequently modified file in a given directory
+# The function takes a directory as input (default is the current directory),
+# and returns the file that has been modified the most times
+MostFreqFile() {
+    directory="${1:-.}"
+    directory=$(realpath "$directory")
+
+    # Get the file counts from the filtered MOLE_RC file list
+    file_counts=$(FilterFileList "$(cat "$MOLE_RC")" | awk '{print $1}' | grep "^$directory/" | sort | uniq -c)
+
+    # Find the file with the highest modification count
+    most_common=$(echo "$file_counts" | sort -n | tail -1 | awk '{print $2}')
+    if [ -n "$most_common" ]; then
+        echo "$(grep "^${directory}" "$MOLE_RC" | grep "$most_common" | head -1 | cut -d ' ' -f 1)"
+    else
+        echo "Error 5: no frequently modified file found"
+        exit 5
+    fi
+}
+
+OpenFile(){
+    if [ -f "$1" ]; then
+        FILE="$(realpath "$1")"
+    elif [ -z "$FILE" ]; then
+        echo "Error 6: no recent file found"
+        exit 6
+    elif [ ! -f "$FILE" ]; then
+        echo "Error 7: file $FILE not found"
+        exit 7
+    fi
+
+    if [ -n "$GROUP" ]; then
+        echo "$FILE $(date +"$DATETIME_FORMAT") $GROUP" >> "$MOLE_RC"
+    else
+        echo "$FILE $(date +"$DATETIME_FORMAT")" >> "$MOLE_RC"
+    fi
+
+    $EDITOR "$FILE"
+}
+
+# Parse the arguments if any flags or commands are not present
+if [ -f "$1" ]; then
+  OpenFile "$1"
+  exit 0
+fi
+
+if [ -d "$1" ]; then
+  FILE=$(MostRecentFile "$1")
+  OpenFile "$FILE"
+  exit 0
+fi
+
+if [ -z "$1" ]; then
+  FILE=$(MostRecentFile "$PWD")
+  OpenFile "$FILE"
+  exit 0
+fi
+
+# Parse the script arguments
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -h)
+            HelpShow
+            exit 0
+            ;;
+        -g)
+            shift
+            if [ -f "$2" ]; then
+              GROUP="$1"
+            else
+              GROUP_FILTER=$(echo "$1" | sed 's/,/\|/g')
+            fi
+            ;;
+        -a)
+            shift
+            AFTER_DATE=$1
+            ;;
+        -b)
+            shift
+            BEFORE_DATE=$1
+            ;;
+        -m)
+            MOST_FREQ=true
+            ;;
+        list)
+            LIST=true
+            ;;
+        secret-log)
+            SECRET_LOG_CREATE=true
+            ;;
+        *)
+            if [ -f "$1" ]; then
+              FILE="$1"
+            fi
+
+            if [ -d "$1" ] && [ "$#" -eq 1 ]; then
+              DIRECTORY="$1"
+            fi
+
+            if [ -d "$1" ] && [ "$#" -gt 1 ]; then
+              while [ "$#" -gt 0 ]; do
+                if [ -d "$1" ]; then
+                  DIRECTORIES="$DIRECTORIES $1"
+                fi
+                shift
+                if [ -z "$1" ]; then
+                  break
+                fi
+              done
+            fi
+            ;;
+    esac
+    if [ "$#" -gt 0 ]; then
+      shift
+    fi
+done
+
+if [ "$LIST" = true ]; then
+  if [ -n "$DIRECTORY" ]; then
+    WriteList "$DIRECTORY"
+  else
+    DIRECTORY="$PWD"
+    WriteList "$DIRECTORY"
+  fi
+  exit 0
+fi
+
+if [ "$SECRET_LOG_CREATE" = true ]; then
+  if [ -n "$DIRECTORIES" ]; then
+    SecretLog $DIRECTORIES
+  else
+    SecretLog
+  fi
+  exit 0
+fi
+
+if [ -n "$GROUP" ]; then
+    FILE="$(realpath "$FILE")"
+    OpenFile "$FILE"
+    exit 0
+fi
+
+if [ "$MOST_FREQ" = false ]; then
+  if [ -n "$DIRECTORY" ] && [ -z "$DIRECTORIES" ]; then
+    FILE=$(MostRecentFile "$1")
+  else
+    FILE=$(MostRecentFile ".")
+  fi
+  OpenFile "$FILE"
+fi
+
+if [ "$MOST_FREQ" = true ]; then
+  if [ -n "$DIRECTORY" ]; then
+    FILE=$(MostFreqFile "$DIRECTORY")
+  else
+    FILE=$(MostFreqFile ".")
+  fi
+  OpenFile "$FILE"
+  exit 0
+fi
