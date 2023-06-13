@@ -20,12 +20,12 @@ mole secret-log [-b DATE] [-a DATE] [DIRECTORY1 [DIRECTORY2 [...]]]
 - mole [-g GROUP] FILE - The specified file will be opened.
 If the -g switch is provided, the file opening will also be assigned to a group named GROUP. GROUP can be the name of an existing or a new group.
 - mole [-m] [FILTERS] [DIRECTORY] - If DIRECTORY corresponds to an existing directory, the script will select a file to be opened from this directory.
-If no directory is specified, the current directory is assumed.
-If more files were edited by the script in the directory, the file that was last opened (edited) with the script will be selected.
-If the -m argument was provided, the script will select the file that was opened (edited) most often by the script.
-If the -m switch finds more files with the same maximum number of openings, the mole can choose any of them.
-File selection can be further influenced by the given FILTERS.
-If no file has been opened (edited) in the directory yet, or no file meets the specified filters, this is considered an error.
+-- If no directory is specified, the current directory is assumed.
+-- If more files were edited by the script in the directory, the file that was last opened (edited) with the script will be selected.
+-- If the -m argument was provided, the script will select the file that was opened (edited) most often by the script.
+-- If the -m switch finds more files with the same maximum number of openings, the mole can choose any of them.
+-- File selection can be further influenced by the given FILTERS.
+-- If no file has been opened (edited) in the directory yet, or no file meets the specified filters, this is considered an error.
 - mole list [FILTERS] [DIRECTORY] - The script will display a list of files that were opened (edited) with the script in the directory.
 If no directory is specified, the current directory is assumed.
 The list of files can be filtered using FILTERS.
@@ -44,4 +44,10 @@ If no directory is provided, the secret log will contain records from all record
 Opened (edited) files to be recorded in the secret log can be further limited using the -a and -b filters (see below).
 
 ## Filters
+  
+FILTERS can be a combination of the following filters (each can be used a maximum of once):
+- [-g GROUP1[,GROUP2[,...]]] – Group specification. A file will be considered (for the purpose of opening or listing) only if its execution falls into at least one of these groups.
+- [-a DATE] - Records of files opened (edited) on or before this date (optionally can be implemented as strictly before the given date; UPDATED 22.3.) will not be considered.
+- [-b DATE] - Records of files opened (edited) on or after this date (optionally can be implemented as strictly after the given date; UPDATED 22.3.) will not be considered.
+The DATE argument is in the format YYYY-MM-DD.
 
